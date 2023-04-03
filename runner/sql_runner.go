@@ -72,6 +72,10 @@ func (sr *SqlRunner) cleanUp(ctx *RunCtx) {
 	sr.runtime.Kill(ctx.ContId)
 }
 
+func (sr *SqlRunner) CreateContainer() string {
+	return sr.runtime.Prepare(spec)
+}
+
 func (sr *SqlRunner) Run(ctx *RunCtx, src string, options *RunOptions) *RunResult {
 
 	var result RunResult

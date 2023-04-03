@@ -36,4 +36,6 @@ type Runner interface {
 	cleanUp(ctx *RunCtx)
 	// Template method
 	Run(src string, options *RunOptions) *RunResult
+
+	CreateContainer() string
 }
