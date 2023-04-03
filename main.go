@@ -17,48 +17,21 @@ type request struct {
 }
 
 type response struct {
-	Status string `json:"status"`
-	Info   string `json:"info"`
-	Table  Table  `json:"table"`
+	Status  string        `json:"status"`
+	Results []QueryResult `json:"queryResults"`
+}
+
+type QueryResult struct {
+	Table Table  `json:"table"`
+	Info  string `json:"info"`
 }
 
 type Table struct {
 	Columns []string            `json:"columns"`
 	Rows    []map[string]string `json:"rows"`
-	Info    string              `json:"info"`
 }
 
 const sessionName = "container-session"
-
-func prepareTables(resultText string) Table {
-	text := resultText
-	lines := strings.Split(text, "\n")
-
-	var t Table
-	columns := strings.Split(lines[0], ",")
-	rows := []map[string]string{}
-
-	// first line are the column names
-	// skip the decorative line
-	var i int
-	for i = 2; i < len(lines); i++ {
-		if len(lines[i]) == 0 {
-			i++
-			break
-		}
-		row := make(map[string]string)
-		data := strings.Split(lines[i], ",")
-		for index, point := range data {
-			row[columns[index]] = point
-		}
-		rows = append(rows, row)
-	}
-	t.Info = strings.Join(lines[i:], "\n")
-	t.Columns = columns
-	t.Rows = rows
-
-	return t
-}
 
 var store = sessions.NewCookieStore([]byte("secret-key-mega"))
 
@@ -69,42 +42,24 @@ func main() {
 
 	router := mux.NewRouter()
 
-	router.HandleFunc("/test", func(w http.ResponseWriter, r *http.Request) {
-
-		// vars := mux.Vars(r)
-		// sessionID := vars["session_id"]
-
-		// if sessionID == "" {
-		// 	json.NewEncoder(w).Encode("no session :/")
-		// } else {
-		// 	json.NewEncoder(w).Encode("session!")
-		// }
-
-		id := GetContainerId(sqlRunner, w, r)
-		json.NewEncoder(w).Encode(id)
-
-	}).Methods("GET")
-
 	router.HandleFunc("/exec", func(w http.ResponseWriter, r *http.Request) {
 
 		var req request
 		json.NewDecoder(r.Body).Decode(&req)
 
-		ctx := &runner.RunCtx{
-			ContId: "81d5a95712fc650ff94cc77b9197d3ee7c2f0e6e1b1fea64d9eeada25a2ba95b",
-		}
-		rr := sqlRunner.Run(ctx, req.Query, &runner.RunOptions{})
+		id := GetContainerId(sqlRunner, w, r)
 
-		var res response
-		if rr.ExitCode == 0 && rr.Status == runner.Finished {
-			res.Table = prepareTables(rr.Result)
-		} else {
-			res.Info = rr.Result
+		ctx := &runner.RunCtx{
+			ContId: id,
 		}
-		res.Status = string(rr.Status)
+		res := sqlRunner.Run(ctx, req.Query, &runner.RunOptions{})
 
 		w.Header().Add("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(res)
+
+		json.NewEncoder(w).Encode(&response{
+			Status:  string(res.Status),
+			Results: prepareResults(strings.Split(res.Result, "\n")),
+		})
 	}).Methods("POST")
 
 	log.Println("Listening on 1337")
@@ -123,12 +78,56 @@ func GetContainerId(sr *runner.SqlRunner, w http.ResponseWriter, r *http.Request
 	if val, ok := sessionId.(string); ok {
 		return val
 	} else {
-		session.Values["session_id"] = sr.CreateContainer()
+		id := sr.CreateContainer()
+		session.Values["session_id"] = id
 		// Save session
 		err = session.Save(r, w)
 		if err != nil {
 			return " "
 		}
-		return "new string needed"
+		return id
 	}
+}
+
+func prepareResults(lines []string) []QueryResult {
+	var results []QueryResult
+	for idx := 0; idx < len(lines); {
+		var result QueryResult
+		if strings.Contains(lines[idx], "-") { // we reached decorators, meaning that column names are before
+			// remove previous result info, because it was definition of columns
+			results = results[:len(results)-1]
+			result.Table = extractTable(lines, &idx)
+		}
+		result.Info = lines[idx]
+		results = append(results, result)
+		idx++
+	}
+
+	results = results[:len(results)-1]
+
+	return results
+}
+
+func extractTable(lines []string, idx *int) Table {
+	columns := strings.Split(lines[*idx-1], ",") // columns are line before
+	rows := []map[string]string{}
+	var t Table
+	for {
+		*idx++
+		line := lines[*idx]
+		if len(line) == 0 {
+			*idx++
+			break
+		}
+		row := make(map[string]string)
+		data := strings.Split(lines[*idx], ",")
+		for index, point := range data {
+			row[columns[index]] = point
+		}
+		rows = append(rows, row)
+	}
+	t.Columns = columns
+	t.Rows = rows
+
+	return t
 }
